@@ -1,3 +1,9 @@
+# Parameters are passed by the consumer through `args:` (see hooks/helmfile-render-manifests/README.md):
+#   -e/--environment <env>   (repeatable, required)
+#   --file <helmfile>        --output '{env}/manifests/manifests.yaml'
+#   --check                  --fail-on-secret=true
+#   --kube-version --include-crds --skip-tests --state-values-set k=v
+#   -- <extra args for `helmfile template`>
 - id: render-manifests
   name: render helmfile manifests (keep rendered output in sync, no Secret)
   description: Renders helmfile environments with an embedded helm (nothing to install) and fails when the committed output is stale or contains a Secret.
