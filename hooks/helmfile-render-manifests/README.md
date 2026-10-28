@@ -1,7 +1,7 @@
 # helmfile-render-manifests
 
 pre-commit hook that renders helmfile environments to files and fails when they are stale or
-contain a `kind: Secret`. Helm is embedded (Helm v4 SDK): nothing but Go-less pre-commit is needed.
+contain a `kind: Secret`. Helm is embedded (Helm v4 SDK): no helm or helmfile install needed (pre-commit builds the hook itself).
 
 ```yaml
 - repo: https://github.com/AvistoTelecom/helmfile
