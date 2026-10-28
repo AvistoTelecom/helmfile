@@ -1,0 +1,7 @@
+- id: render-manifests
+  name: render helmfile manifests (keep rendered output in sync, no Secret)
+  description: Renders helmfile environments with an embedded helm (nothing to install) and fails when the committed output is stale or contains a Secret.
+  entry: helmfile-render-manifests
+  language: golang
+  files: \.(ya?ml|gotmpl|tpl)$
+  pass_filenames: false
