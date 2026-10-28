@@ -1,6 +1,9 @@
-// Command helmfile-render-manifests renders helmfile environments to files and
-// fails when they are out of date. It embeds helm, so neither helm nor helmfile
-// needs to be installed: it is meant to be used as a pre-commit hook.
+// Command helmfile-render-manifests runs the regular helmfile CLI with an embedded
+// helm (no helm binary needed) and writes its stdout to a file, failing when the
+// file was out of date or the output contains a Secret. Everything after "--" is
+// passed to helmfile unchanged, e.g.:
+//
+//	helmfile-render-manifests --output int/manifests.yaml -- -f helmfile.yaml.gotmpl -e int template
 package main
 
 import (
@@ -11,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/helmfile/helmfile/cmd"
 	"github.com/helmfile/helmfile/pkg/app"
@@ -21,91 +23,45 @@ import (
 
 var secretKind = regexp.MustCompile(`(?m)^kind:\s*["']?Secret["']?\s*$`)
 
-type list []string
-
-func (l *list) String() string     { return strings.Join(*l, ",") }
-func (l *list) Set(v string) error { *l = append(*l, v); return nil }
-
 func main() {
-	var (
-		envs        list
-		stateSet    list
-		file        = flag.String("file", "", "helmfile path (default: helmfile's own lookup)")
-		output      = flag.String("output", "{env}/manifests/manifests.yaml", "output path; {env} is replaced by the environment name")
-		check       = flag.Bool("check", false, "do not write, only fail when an output file is out of date")
-		failSecret  = flag.Bool("fail-on-secret", true, "fail when a rendered manifest has kind: Secret")
-		kubeVersion = flag.String("kube-version", "", "pass --kube-version to helm template")
-		includeCRDs = flag.Bool("include-crds", false, "include CRDs in the output")
-		skipTests   = flag.Bool("skip-tests", false, "skip tests from the output")
-	)
-	flag.Var(&envs, "environment", "environment to render (repeatable, required)")
-	flag.Var(&envs, "e", "shorthand for --environment")
-	flag.Var(&stateSet, "state-values-set", "state value override key=value (repeatable)")
+	output := flag.String("output", "", "file the helmfile stdout is written to (required)")
+	check := flag.Bool("check", false, "do not write, only fail when the output file is out of date")
+	failSecret := flag.Bool("fail-on-secret", true, "fail when the output contains kind: Secret")
 	flag.Parse()
-	if len(envs) == 0 {
-		fatal("at least one --environment is required")
+	if *output == "" || flag.NArg() == 0 {
+		fatal("usage: helmfile-render-manifests --output FILE [--check] [--fail-on-secret=false] -- <helmfile args>")
 	}
 
 	app.RunnerOverride = helmexec.EmbeddedRunner{}
-	// ponytail: a kube context would leak its namespace into the render; always render context-free like CI.
+	// A kube context would leak its namespace into the render; render context-free like CI.
 	os.Setenv("KUBECONFIG", os.DevNull)
 
-	failed := false
-	for _, env := range envs {
-		args := []string{"--log-level", "error", "-e", env}
-		if *file != "" {
-			args = append(args, "-f", *file)
-		}
-		for _, s := range stateSet {
-			args = append(args, "--state-values-set", s)
-		}
-		args = append(args, "template", "--concurrency=1")
-		if *kubeVersion != "" {
-			args = append(args, "--kube-version", *kubeVersion)
-		}
-		if *includeCRDs {
-			args = append(args, "--include-crds")
-		}
-		if *skipTests {
-			args = append(args, "--skip-tests")
-		}
-		args = append(args, flag.Args()...)
-
-		rendered, err := render(args)
-		if err != nil {
-			fatal("%s: %v", env, err)
-		}
-		if *failSecret && secretKind.Match(rendered) {
-			fmt.Fprintf(os.Stderr, "%s: rendered manifests contain a Secret\n", env)
-			failed = true
-			continue
-		}
-
-		path := strings.ReplaceAll(*output, "{env}", env)
-		current, _ := os.ReadFile(path)
-		if bytes.Equal(current, rendered) {
-			continue
-		}
-		failed = true
-		if *check {
-			fmt.Fprintf(os.Stderr, "%s is out of date\n", path)
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			fatal("%v", err)
-		}
-		if err := os.WriteFile(path, rendered, 0o644); err != nil {
-			fatal("%v", err)
-		}
-		fmt.Fprintf(os.Stderr, "updated %s\n", path)
+	rendered, err := run(flag.Args())
+	if err != nil {
+		fatal("%v", err)
 	}
-	if failed {
-		os.Exit(1)
+	if *failSecret && secretKind.Match(rendered) {
+		fatal("%s: rendered manifests contain a Secret", *output)
 	}
+	current, _ := os.ReadFile(*output)
+	if bytes.Equal(current, rendered) {
+		return
+	}
+	if *check {
+		fatal("%s is out of date", *output)
+	}
+	if err := os.MkdirAll(filepath.Dir(*output), 0o755); err != nil {
+		fatal("%v", err)
+	}
+	if err := os.WriteFile(*output, rendered, 0o644); err != nil {
+		fatal("%v", err)
+	}
+	fmt.Fprintf(os.Stderr, "updated %s\n", *output)
+	os.Exit(1)
 }
 
-// render runs `helmfile <args>` in-process and returns what it printed on stdout.
-func render(args []string) ([]byte, error) {
+// run executes the helmfile CLI in-process and returns what it printed on stdout.
+func run(args []string) ([]byte, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
