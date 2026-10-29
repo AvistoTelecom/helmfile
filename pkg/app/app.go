@@ -32,6 +32,10 @@ import (
 var CleanWaitGroup sync.WaitGroup
 var Cancel goContext.CancelFunc
 
+// RunnerOverride, when set, replaces the helm subprocess runner of every App
+// (e.g. helmexec.EmbeddedRunner to run helm in-process).
+var RunnerOverride helmexec.Runner
+
 // App is the main application object.
 type App struct {
 	OverrideKubeContext             string
@@ -1044,11 +1048,7 @@ func (a *App) getHelm(st *state.HelmState) (helmexec.Interface, error) {
 			EnforcePluginVerification: a.EnforcePluginVerification,
 			HelmOCIPlainHTTP:          a.HelmOCIPlainHTTP,
 			RepoRetry:                 a.RepoRetry,
-		}, a.Logger, kubeconfig, kubectx, &helmexec.ShellRunner{
-			Logger:                     a.Logger,
-			Ctx:                        a.ctx,
-			StripArgsValuesOnExitError: a.StripArgsValuesOnExitError,
-		})
+		}, a.Logger, kubeconfig, kubectx, a.helmRunner())
 		if err != nil {
 			return nil, err
 		}
@@ -3079,4 +3079,15 @@ func GetArgs(args string, state *state.HelmState) []string {
 	state.HelmDefaults.Args = append(baseArgs, stateArgs...)
 
 	return state.HelmDefaults.Args
+}
+
+func (a *App) helmRunner() helmexec.Runner {
+	if RunnerOverride != nil {
+		return RunnerOverride
+	}
+	return &helmexec.ShellRunner{
+		Logger:                     a.Logger,
+		Ctx:                        a.ctx,
+		StripArgsValuesOnExitError: a.StripArgsValuesOnExitError,
+	}
 }
